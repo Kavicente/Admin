@@ -10,12 +10,14 @@ from email.mime.text import MIMEText
 import hmac
 import hashlib
 import time
+from flask_cors import CORS
 
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 app.secret_key = os.getenv('FLASK_SECRET_KEY', 'admin-secret-key')
+CORS(app, resources={r"/api/*": {"origins": "*"}})  # Allow CORS for API routes
 ALERTNOW_URL = 'https://alert-858l.onrender.com'
 MAX_LOGIN_ATTEMPTS = 5
 LOCKOUT_MINUTES = 15
@@ -220,6 +222,7 @@ def admin_accounts():
         response = requests.get(f'{ALERTNOW_URL}/api/admin_accounts')
         logger.debug(f"Admin accounts response: status={response.status_code}, body={response.text}")
         if response.status_code == 200:
+            logger.info("Successfully fetched admin accounts")
             return jsonify(response.json())
         else:
             logger.error(f"Failed to fetch accounts: status={response.status_code}, body={response.text}")
