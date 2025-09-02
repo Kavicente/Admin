@@ -1,219 +1,244 @@
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Admin Dashboard</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/admin.css') }}">
-    <script src="https://cdn.socket.io/4.0.0/socket.io.min.js"></script>
-    <script>
-        const socket = io('https://alert-858l.onrender.com');
-        socket.on('connect', () => {
-            console.log('Connected to WebSocket');
-        });
+from flask import Flask, request, jsonify, render_template, redirect, url_for, session
+import logging
+import json
+import requests
+import os
+import secrets
+import string
+import smtplib
+from email.mime.text import MIMEText
+import hmac
+import hashlib
+import time
 
-        socket.on('new_user', (user) => {
-            fetchUsers(); // Refresh tables on new signup
-        });
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
+app = Flask(__name__)
+app.secret_key = os.getenv('FLASK_SECRET_KEY', 'admin-secret-key')
+ALERTNOW_URL = 'https://alert-858l.onrender.com'
+MAX_LOGIN_ATTEMPTS = 5
+LOCKOUT_MINUTES = 15
 
-        async function fetchUsers() {
-            try {
-                const response = await fetch('https://alert-858l.onrender.com/api/get_all_users');
-                const users = await response.json();
-                updateTables(users);
-            } catch (error) {
-                console.error('Error fetching users:', error);
-            }
-        }
+def generate_and_email_admin_credentials():
+    """Generate a random password, store it in admin.txt, and email it."""
+    admin_txt_path = os.path.join(os.path.dirname(__file__), 'static', 'txt', 'admin.txt')
+    smtp_email = os.getenv('SMTP_EMAIL', 'castillovinceb@gmail.com')  # Replace with your email
+    smtp_password = os.getenv('SMTP_PASSWORD', 'wljnxxzqzlkpkpyk')  # Replace with your app password
+    recipient_email = os.getenv('ADMIN_EMAIL', 'vncbcstll@gmail.com')  # Replace with recipient email
 
-        function updateTables(users) {
-            const allTable = document.getElementById('all-accounts-table').getElementsByTagName('tbody')[0];
-            const residentTable = document.getElementById('resident-accounts-table').getElementsByTagName('tbody')[0];
-            const barangayTable = document.getElementById('barangay-accounts-table').getElementsByTagName('tbody')[0];
-            const agenciesTable = document.getElementById('agencies-accounts-table').getElementsByTagName('tbody')[0];
+    # Generate a secure 16-character password
+    alphabet = string.ascii_letters + string.digits + string.punctuation
+    password = ''.join(secrets.choice(alphabet) for _ in range(16))
+    admin_creds = {'username': 'admin', 'password': password}
 
-            allTable.innerHTML = '';
-            residentTable.innerHTML = '';
-            barangayTable.innerHTML = '';
-            agenciesTable.innerHTML = '';
+    # Write credentials to admin.txt
+    try:
+        os.makedirs(os.path.dirname(admin_txt_path), exist_ok=True)
+        with open(admin_txt_path, 'w') as f:
+            json.dump(admin_creds, f)
+        logger.debug(f"Admin credentials written to {admin_txt_path}")
+    except Exception as e:
+        logger.error(f"Failed to write admin.txt: {e}")
+        raise Exception(f"Failed to create admin credentials: {e}")
 
-            users.forEach(user => {
-                const row = `
-                    <tr>
-                        <td>${user.source}</td>
-                        <td>${user.role}</td>
-                        <td>${user.username || user.contact_no}</td>
-                        <td>${user.first_name} ${user.middle_name} ${user.last_name}</td>
-                        <td>${user.barangay || ''}</td>
-                        <td>${user.municipality || ''}</td>
-                        <td>${user.status}</td>
-                        <td>
-                            ${user.source === 'android' && user.role === 'resident' ? `
-                                <button onclick="updateStatus('${user.source}', '${user.username}', 'active')">Activate</button>
-                                <button onclick="updateStatus('${user.source}', '${user.username}', 'warning')">Warn</button>
-                                <button onclick="updateStatus('${user.source}', '${user.username}', 'suspended')">Suspend</button>
-                                <button onclick="deleteUser('${user.source}', '${user.username}')">Delete</button>
-                            ` : ''}
-                        </td>
-                    </tr>
-                `;
-                allTable.insertAdjacentHTML('beforeend', row);
-                if (user.source === 'android' && user.role === 'resident') {
-                    residentTable.insertAdjacentHTML('beforeend', row);
-                }
-                if (user.role === 'barangay') {
-                    barangayTable.insertAdjacentHTML('beforeend', row);
-                }
-                if (user.role in ['cdrrmo', 'pnp', 'bfp']) {
-                    agenciesTable.insertAdjacentHTML('beforeend', row);
-                }
-            });
-        }
+    # Send email with password
+    try:
+        msg = MIMEText(f"Your Admin Dashboard credentials:\n\nUsername: admin\nPassword: {password}\n\nStore this securely and do not share.")
+        msg['Subject'] = 'Admin Dashboard Credentials'
+        msg['From'] = smtp_email
+        msg['To'] = recipient_email
 
-        async function updateStatus(source, identifier, status) {
-            try {
-                const response = await fetch(`/admin/update_status/${source}/${identifier}/${status}`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' }
-                });
-                if (response.ok) {
-                    alert('Status updated successfully');
-                    fetchUsers();
-                } else {
-                    alert('Failed to update status');
-                }
-            } catch (error) {
-                console.error('Error updating status:', error);
-                alert('Error updating status');
-            }
-        }
+        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
+            server.login(smtp_email, smtp_password)
+            server.sendmail(smtp_email, recipient_email, msg.as_string())
+        logger.info(f"Admin credentials emailed to {recipient_email}")
+    except Exception as e:
+        logger.error(f"Failed to send email: {e}")
+        raise Exception(f"Failed to send admin credentials email: {e}")
 
-        async function deleteUser(source, identifier) {
-            if (confirm('Are you sure you want to delete this user?')) {
-                try {
-                    const response = await fetch(`/admin/delete_user/${source}/${identifier}`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' }
-                    });
-                    if (response.ok) {
-                        alert('User deleted successfully');
-                        fetchUsers();
-                    } else {
-                        alert('Failed to delete user');
-                    }
-                } catch (error) {
-                    console.error('Error deleting user:', error);
-                    alert('Error deleting user');
-                }
-            }
-        }
+    return admin_creds
 
-        function showTab(tabId) {
-            document.querySelectorAll('.section').forEach(section => {
-                section.classList.add('hidden');
-            });
-            document.getElementById(tabId).classList.remove('hidden');
-            document.querySelectorAll('.tab').forEach(tab => {
-                tab.classList.remove('active');
-            });
-            document.getElementById(`tab-${tabId}`).classList.add('active');
-        }
-
-        window.onload = () => {
-            fetchUsers();
-            showTab('all-accounts');
-        };
-    </script>
-</head>
-<body>
-    <div class="sidebar">
+def read_admin_credentials():
+    """Read admin credentials from admin.txt."""
+    admin_txt_path = os.path.join(os.path.dirname(__file__), 'static', 'txt', 'admin.txt')
+    try:
+        if not os.path.exists(admin_txt_path):
+            logger.warning(f"admin.txt not found at {admin_txt_path}. Generating new credentials.")
+            return generate_and_email_admin_credentials()
         
-        <nav>
-            <ul>
-                <li><a href="#" onclick="showTab('all-accounts')" id="tab-all-accounts" class="tab active">All Accounts</a></li>
-                <li><a href="#" onclick="showTab('resident-accounts')" id="tab-resident-accounts" class="tab">Resident Accounts</a></li>
-                <li><a href="#" onclick="showTab('barangay-accounts')" id="tab-barangay-accounts" class="tab">Barangay Accounts</a></li>
-                <li><a href="#" onclick="showTab('agencies-accounts')" id="tab-agencies-accounts" class="tab">Agencies Accounts</a></li>
-                <li><a href="{{ url_for('logout') }}"><span>🚪</span> Log Out</a></li>
-            </ul>
-        </nav>
-    </div>
-    <div class="main-content">
-        <button class="toggle-btn" onclick="document.querySelector('.sidebar').classList.toggle('open'); document.querySelector('.main-content').classList.toggle('shifted');">☰</button>
-        <header>
-            <h1 class="h1">Admin Dashboard</h1>
-        </header>
-        <div class="section" id="all-accounts">
-            <h2>All Accounts</h2>
-            <table id="all-accounts-table">
-                <thead>
-                    <tr>
-                        <th>Source</th>
-                        <th>Role</th>
-                        <th>Identifier</th>
-                        <th>Name</th>
-                        <th>Barangay</th>
-                        <th>Municipality</th>
-                        <th>Status</th>
-                        <th>Actions</th>
-                    </tr>
-                </thead>
-                <tbody></tbody>
-            </table>
-        </div>
-        <div class="section hidden" id="resident-accounts">
-            <h2>Resident Accounts</h2>
-            <table id="resident-accounts-table">
-                <thead>
-                    <tr>
-                        <th>Source</th>
-                        <th>Role</th>
-                        <th>Identifier</th>
-                        <th>Name</th>
-                        <th>Barangay</th>
-                        <th>Municipality</th>
-                        <th>Status</th>
-                        <th>Actions</th>
-                    </tr>
-                </thead>
-                <tbody></tbody>
-            </table>
-        </div>
-        <div class="section hidden" id="barangay-accounts">
-            <h2>Barangay Accounts</h2>
-            <table id="barangay-accounts-table">
-                <thead>
-                    <tr>
-                        <th>Source</th>
-                        <th>Role</th>
-                        <th>Identifier</th>
-                        <th>Name</th>
-                        <th>Barangay</th>
-                        <th>Municipality</th>
-                        <th>Status</th>
-                        <th>Actions</th>
-                    </tr>
-                </thead>
-                <tbody></tbody>
-            </table>
-        </div>
-        <div class="section hidden" id="agencies-accounts">
-            <h2>Agencies Accounts</h2>
-            <table id="agencies-accounts-table">
-                <thead>
-                    <tr>
-                        <th>Source</th>
-                        <th>Role</th>
-                        <th>Identifier</th>
-                        <th>Name</th>
-                        <th>Barangay</th>
-                        <th>Municipality</th>
-                        <th>Status</th>
-                        <th>Actions</th>
-                    </tr>
-                </thead>
-                <tbody></tbody>
-            </table>
-        </div>
-    </div>
-</body>
-</html>
+        with open(admin_txt_path, 'r') as f:
+            admin_creds = json.load(f)
+        logger.debug(f"Successfully read admin.txt: {admin_creds}")
+        return admin_creds
+    except json.JSONDecodeError as e:
+        logger.error(f"Failed to parse admin.txt: Invalid JSON format - {e}")
+        raise Exception("admin.txt contains invalid JSON")
+    except Exception as e:
+        logger.error(f"Error reading admin.txt: {e}")
+        raise Exception(f"Failed to read admin credentials: {e}")
+
+@app.route('/')
+def index():
+    if 'admin_logged_in' in session:
+        return redirect(url_for('admin_dashboard'))
+    return render_template('AdminLogin.html')
+
+@app.route('/logout')
+def logout():
+    session.pop('admin_logged_in', None)
+    session.pop('login_attempts', None)
+    session.pop('lockout_time', None)
+    return redirect(url_for('index'))
+
+@app.route('/admin_login', methods=['POST'])
+def admin_login():
+    try:
+        # Initialize login attempt counter
+        if 'login_attempts' not in session:
+            session['login_attempts'] = 0
+            session['lockout_time'] = 0
+
+        # Check for lockout
+        current_time = time.time()
+        if session['login_attempts'] >= MAX_LOGIN_ATTEMPTS and current_time < session['lockout_time']:
+            remaining = int((session['lockout_time'] - current_time) / 60) + 1
+            logger.warning(f"Login attempt blocked due to lockout for IP {request.remote_addr}")
+            return render_template('AdminLogin.html', error=f"Too many login attempts. Try again in {remaining} minute{'s' if remaining > 1 else ''}")
+
+        # Get form data
+        data = request.form
+        username = data.get('username', '').strip()
+        password = data.get('password', '').strip()
+
+        # Validate input
+        if not username or not password:
+            session['login_attempts'] += 1
+            logger.warning(f"Login failed: Empty username or password (attempt {session['login_attempts']}/{MAX_LOGIN_ATTEMPTS})")
+            if session['login_attempts'] >= MAX_LOGIN_ATTEMPTS:
+                session['lockout_time'] = current_time + (LOCKOUT_MINUTES * 60)
+            return render_template('AdminLogin.html', error='Username and password are required')
+
+        # Read credentials
+        admin_creds = read_admin_credentials()
+
+        # Secure password comparison
+        if (hmac.compare_digest(username.encode('utf-8'), admin_creds['username'].encode('utf-8')) and
+            hmac.compare_digest(password.encode('utf-8'), admin_creds['password'].encode('utf-8'))):
+            session['admin_logged_in'] = True
+            session['login_attempts'] = 0  # Reset attempts on success
+            session.pop('lockout_time', None)
+            logger.info(f"Admin login successful for username: {username}")
+            return redirect(url_for('admin_dashboard'))
+        else:
+            session['login_attempts'] += 1
+            logger.warning(f"Login failed: Invalid credentials for username {username} (attempt {session['login_attempts']}/{MAX_LOGIN_ATTEMPTS})")
+            if session['login_attempts'] >= MAX_LOGIN_ATTEMPTS:
+                session['lockout_time'] = current_time + (LOCKOUT_MINUTES * 60)
+                return render_template('AdminLogin.html', error=f"Too many failed attempts. Locked out for {LOCKOUT_MINUTES} minutes")
+            return render_template('AdminLogin.html', error='Invalid username or password')
+    except Exception as e:
+        session['login_attempts'] += 1
+        logger.error(f"Admin login failed: {e} (attempt {session['login_attempts']}/{MAX_LOGIN_ATTEMPTS})")
+        if session['login_attempts'] >= MAX_LOGIN_ATTEMPTS:
+            session['lockout_time'] = current_time + (LOCKOUT_MINUTES * 60)
+            return render_template('AdminLogin.html', error=f"Too many failed attempts. Locked out for {LOCKOUT_MINUTES} minutes")
+        return render_template('AdminLogin.html', error=str(e))
+
+@app.route('/admin_dashboard')
+def admin_dashboard():
+    if 'admin_logged_in' not in session:
+        logger.warning("Unauthorized access to admin_dashboard")
+        return redirect(url_for('index'))
+    return render_template('AdminDashboard.html')
+
+@app.route('/api/admin_create_user', methods=['POST'])
+def admin_create_user():
+    if 'admin_logged_in' not in session:
+        return jsonify({'error': 'Unauthorized'}), 401
+    
+    data = request.json
+    try:
+        response = requests.post(f'{ALERTNOW_URL}/api/admin_create_user', json=data)
+        if response.status_code == 200:
+            logger.info(f"User {data.get('username')} created successfully with role {data.get('role')}")
+            return jsonify(response.json())
+        else:
+            logger.error(f"User creation failed: {response.text}")
+            return jsonify({'error': response.text}), response.status_code
+    except Exception as e:
+        logger.error(f"User creation failed: {e}")
+        return jsonify({'error': str(e)}), 400
+
+@app.route('/api/admin_delete_user', methods=['POST'])
+def admin_delete_user():
+    if 'admin_logged_in' not in session:
+        return jsonify({'error': 'Unauthorized'}), 401
+    
+    data = request.json
+    try:
+        response = requests.post(f'{ALERTNOW_URL}/api/admin_delete_user', json=data)
+        if response.status_code == 200:
+            logger.info(f"User with contact_no {data.get('contact_no')} deleted successfully")
+            return jsonify(response.json())
+        else:
+            logger.error(f"User deletion failed: {response.text}")
+            return jsonify({'error': response.text}), response.status_code
+    except Exception as e:
+        logger.error(f"User deletion failed for contact_no {data.get('contact_no')}: {e}")
+        return jsonify({'error': str(e)}), 400
+
+@app.route('/api/admin_warn', methods=['POST'])
+def admin_warn():
+    if 'admin_logged_in' not in session:
+        return jsonify({'error': 'Unauthorized'}), 401
+    
+    data = request.json
+    try:
+        response = requests.post(f'{ALERTNOW_URL}/api/admin_warn', json=data)
+        if response.status_code == 200:
+            logger.info(f"Warning sent to user with contact_no {data.get('contact_no')}")
+            return jsonify(response.json())
+        else:
+            logger.error(f"Failed to send warning: {response.text}")
+            return jsonify({'error': response.text}), response.status_code
+    except Exception as e:
+        logger.error(f"Failed to send warning to contact_no {data.get('contact_no')}: {e}")
+        return jsonify({'error': str(e)}), 400
+
+@app.route('/api/admin_suspend', methods=['POST'])
+def admin_suspend():
+    if 'admin_logged_in' not in session:
+        return jsonify({'error': 'Unauthorized'}), 401
+    
+    data = request.json
+    try:
+        response = requests.post(f'{ALERTNOW_URL}/api/admin_suspend', json=data)
+        if response.status_code == 200:
+            logger.info(f"User with contact_no {data.get('contact_no')} suspended")
+            return jsonify(response.json())
+        else:
+            logger.error(f"Failed to suspend user: {response.text}")
+            return jsonify({'error': response.text}), response.status_code
+    except Exception as e:
+        logger.error(f"Failed to suspend user with contact_no {data.get('contact_no')}: {e}")
+        return jsonify({'error': str(e)}), 400
+
+@app.route('/api/admin_accounts', methods=['GET'])
+def admin_accounts():
+    if 'admin_logged_in' not in session:
+        return jsonify({'error': 'Unauthorized'}), 401
+    
+    try:
+        response = requests.get(f'{ALERTNOW_URL}/api/admin_accounts')
+        if response.status_code == 200:
+            return jsonify(response.json())
+        else:
+            logger.error(f"Failed to fetch accounts: {response.text}")
+            return jsonify({'error': response.text}), response.status_code
+    except Exception as e:
+        logger.error(f"Error fetching accounts: {e}")
+        return jsonify({'error': str(e)}), 500
+
+if __name__ == '__main__':
+    app.run(debug=True, host='0.0.0.0', port=int(os.environ.get('PORT', 5001)))
