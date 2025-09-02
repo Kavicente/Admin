@@ -14,6 +14,14 @@
             fetchUsers(); // Refresh tables on new signup
         });
 
+        socket.on('user_status_updated', (data) => {
+            fetchUsers(); // Refresh tables on status update
+        });
+
+        socket.on('user_deleted', (data) => {
+            fetchUsers(); // Refresh tables on user deletion
+        });
+
         async function loadUsers() {
             try {
                 const response = await fetch('/api/admin_accounts', {
@@ -23,62 +31,24 @@
                     throw new Error(`HTTP error! Status: ${response.status}`);
                 }
                 const users = await response.json();
-                const tbody = document.getElementById('userTableBody');
-                tbody.innerHTML = ''; // Clear existing rows
-                users.forEach(user => {
-                    const row = document.createElement('tr');
-                    row.innerHTML = `
-                        <td>${user.username || 'N/A'}</td>
-                        <td>${user.contact_no || 'N/A'}</td>
-                        <td>${user.role || 'N/A'}</td>
-                        <td>${user.status || 'N/A'}</td>
-                        <td>
-                            <button onclick="deleteUser('${user.contact_no}')">Delete</button>
-                            <button onclick="warnUser('${user.contact_no}')">Warn</button>
-                            <button onclick="suspendUser('${user.contact_no}')">Suspend</button>
-                        </td>
-                    `;
-                    tbody.appendChild(row);
-                });
+                updateTables(users);
             } catch (error) {
                 console.error('Error loading users:', error);
                 alert('Failed to load user data: ' + error.message);
             }
         }
 
-        // Create user
-        document.getElementById('createUserForm').addEventListener('submit', async (e) => {
-            e.preventDefault();
-            const formData = new FormData(e.target);
-            const data = {
-                username: formData.get('username'),
-                contact_no: formData.get('contact_no'),
-                role: formData.get('role')
-            };
+        async function fetchUsers() {
             try {
-                const response = await fetch('/api/admin_create_user', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(data)
-                });
+                const response = await fetch('/api/admin_accounts');
                 if (!response.ok) {
                     throw new Error(`HTTP error! Status: ${response.status}`);
                 }
-                alert('User created successfully');
-                loadUsers(); // Refresh table
-            } catch (error) {
-                console.error('Error creating user:', error);
-                alert('Failed to create user: ' + error.message);
-            }
-        });
-
-        async function fetchUsers() {
-            try {
-                const response = await fetch('https://alert-858l.onrender.com/api/get_all_users');
                 const users = await response.json();
                 updateTables(users);
             } catch (error) {
                 console.error('Error fetching users:', error);
+                alert('Failed to fetch users: ' + error.message);
             }
         }
 
@@ -109,6 +79,11 @@
                                 <button onclick="updateStatus('${user.source}', '${user.username}', 'warning')">Warn</button>
                                 <button onclick="updateStatus('${user.source}', '${user.username}', 'suspended')">Suspend</button>
                                 <button onclick="deleteUser('${user.source}', '${user.username}')">Delete</button>
+                            ` : user.source === 'web' ? `
+                                <button onclick="updateStatus('${user.source}', '${user.contact_no}', 'active')">Activate</button>
+                                <button onclick="updateStatus('${user.source}', '${user.contact_no}', 'warning')">Warn</button>
+                                <button onclick="updateStatus('${user.source}', '${user.contact_no}', 'suspended')">Suspend</button>
+                                <button onclick="deleteUser('${user.source}', '${user.contact_no}')">Delete</button>
                             ` : ''}
                         </td>
                     </tr>
@@ -120,46 +95,77 @@
                 if (user.role === 'barangay') {
                     barangayTable.insertAdjacentHTML('beforeend', row);
                 }
-                if (user.role in ['cdrrmo', 'pnp', 'bfp']) {
+                if (['cdrrmo', 'pnp', 'bfp'].includes(user.role)) {
                     agenciesTable.insertAdjacentHTML('beforeend', row);
                 }
             });
         }
 
+        // Create user
+        document.getElementById('createUserForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const formData = new FormData(e.target);
+            const data = {
+                username: formData.get('username'),
+                contact_no: formData.get('contact_no'),
+                role: formData.get('role')
+            };
+            try {
+                const response = await fetch('/api/admin_create_user', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+                if (!response.ok) {
+                    throw new Error(`HTTP error! Status: ${response.status}`);
+                }
+                alert('User created successfully');
+                fetchUsers(); // Refresh table
+            } catch (error) {
+                console.error('Error creating user:', error);
+                alert('Failed to create user: ' + error.message);
+            }
+        });
+
         async function updateStatus(source, identifier, status) {
             try {
-                const response = await fetch(`/admin/update_status/${source}/${identifier}/${status}`, {
+                const endpoint = status === 'warning' ? '/api/admin_warn' : status === 'suspended' ? '/api/admin_suspend' : '/api/update_user_status';
+                const response = await fetch(endpoint, {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' }
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ source, identifier, status })
                 });
                 if (response.ok) {
-                    alert('Status updated successfully');
+                    alert(`User ${status} successfully`);
                     fetchUsers();
                 } else {
-                    alert('Failed to update status');
+                    const errorData = await response.json();
+                    alert(`Failed to update status: ${errorData.error}`);
                 }
             } catch (error) {
                 console.error('Error updating status:', error);
-                alert('Error updating status');
+                alert('Error updating status: ' + error.message);
             }
         }
 
         async function deleteUser(source, identifier) {
             if (confirm('Are you sure you want to delete this user?')) {
                 try {
-                    const response = await fetch(`/admin/delete_user/${source}/${identifier}`, {
+                    const response = await fetch('/api/admin_delete_user', {
                         method: 'POST',
-                        headers: { 'Content-Type': 'application/json' }
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ source, identifier })
                     });
                     if (response.ok) {
                         alert('User deleted successfully');
                         fetchUsers();
                     } else {
-                        alert('Failed to delete user');
+                        const errorData = await response.json();
+                        alert(`Failed to delete user: ${errorData.error}`);
                     }
                 } catch (error) {
                     console.error('Error deleting user:', error);
-                    alert('Error deleting user');
+                    alert('Error deleting user: ' + error.message);
                 }
             }
         }
@@ -183,7 +189,6 @@
 </head>
 <body>
     <div class="sidebar">
-        
         <nav>
             <ul>
                 <li><a href="#" onclick="showTab('all-accounts')" id="tab-all-accounts" class="tab active">All Accounts</a></li>
