@@ -14,6 +14,63 @@
             fetchUsers(); // Refresh tables on new signup
         });
 
+        async function loadUsers() {
+            try {
+                const response = await fetch('/api/admin_accounts', {
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                if (!response.ok) {
+                    throw new Error(`HTTP error! Status: ${response.status}`);
+                }
+                const users = await response.json();
+                const tbody = document.getElementById('userTableBody');
+                tbody.innerHTML = ''; // Clear existing rows
+                users.forEach(user => {
+                    const row = document.createElement('tr');
+                    row.innerHTML = `
+                        <td>${user.username || 'N/A'}</td>
+                        <td>${user.contact_no || 'N/A'}</td>
+                        <td>${user.role || 'N/A'}</td>
+                        <td>${user.status || 'N/A'}</td>
+                        <td>
+                            <button onclick="deleteUser('${user.contact_no}')">Delete</button>
+                            <button onclick="warnUser('${user.contact_no}')">Warn</button>
+                            <button onclick="suspendUser('${user.contact_no}')">Suspend</button>
+                        </td>
+                    `;
+                    tbody.appendChild(row);
+                });
+            } catch (error) {
+                console.error('Error loading users:', error);
+                alert('Failed to load user data: ' + error.message);
+            }
+        }
+
+        // Create user
+        document.getElementById('createUserForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const formData = new FormData(e.target);
+            const data = {
+                username: formData.get('username'),
+                contact_no: formData.get('contact_no'),
+                role: formData.get('role')
+            };
+            try {
+                const response = await fetch('/api/admin_create_user', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+                if (!response.ok) {
+                    throw new Error(`HTTP error! Status: ${response.status}`);
+                }
+                alert('User created successfully');
+                loadUsers(); // Refresh table
+            } catch (error) {
+                console.error('Error creating user:', error);
+                alert('Failed to create user: ' + error.message);
+            }
+        });
 
         async function fetchUsers() {
             try {
